@@ -23,14 +23,14 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Build signed APK
+        run: gradle :app:assembleRelease --stacktrace
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk QuanLyTroNang-v1.2.apk
+        run: cp app/build/outputs/apk/release/app-release.apk QuanLyTroNang-v1.3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: QuanLyTroNang-v1.2
-          path: QuanLyTroNang-v1.2.apk
+          name: QuanLyTroNang-v1.3
+          path: QuanLyTroNang-v1.3.apk

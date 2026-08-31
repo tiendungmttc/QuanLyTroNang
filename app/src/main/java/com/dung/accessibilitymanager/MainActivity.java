@@ -1,10 +1,12 @@
 package com.dung.accessibilitymanager;
 
 import android.Manifest;
+import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -23,12 +25,15 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.text.Collator;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 public class MainActivity extends Activity {
@@ -54,10 +59,12 @@ public class MainActivity extends Activity {
     static class Candidate {
         final String component;
         final String label;
+        final boolean systemApp;
 
-        Candidate(String component, String label) {
+        Candidate(String component, String label, boolean systemApp) {
             this.component = component;
             this.label = label;
+            this.systemApp = systemApp;
         }
     }
 
@@ -131,7 +138,7 @@ public class MainActivity extends Activity {
         serviceList.setOrientation(LinearLayout.VERTICAL);
         root.addView(serviceList);
 
-        TextView note = text("Danh sách chọn được lưu lại. Nút TẮT TẤT CẢ chỉ tắt các dịch vụ trong nhóm Ứng dụng đã tải xuống và không xóa lựa chọn của bạn.", 13);
+        TextView note = text("Danh sách lựa chọn được lưu lại. TẮT TẤT CẢ chỉ tắt các mục trong nhóm “Ứng dụng đã tải xuống”.", 13);
         note.setPadding(0, dp(16), 0, 0);
         root.addView(note);
 
@@ -155,19 +162,60 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String normalizeLabel(String s) {
+        if (s == null) return "";
+        String n = Normalizer.normalize(s, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT)
+                .trim();
+        return n.replace('đ', 'd');
+    }
+
     /**
-     * HyperOS/Android Settings' "Downloaded apps" group is intended for accessibility
-     * services supplied by non-system apps. Built-in accessibility features are excluded.
-     * We mirror that behavior by excluding system and updated-system packages.
+     * HyperOS places some Xiaomi/Microsoft system components inside the visible
+     * “Ứng dụng đã tải xuống” section, while other built-in accessibility tools
+     * (TalkBack, Switch Access, Accessibility Menu, Game Turbo...) are outside it.
+     * For this Redmi/HyperOS layout we therefore include all third-party services,
+     * plus the system services that HyperOS itself shows in that section.
      */
-    private boolean isDownloadedAccessibilityService(ResolveInfo ri) {
+    private boolean shouldAppearInDownloadedGroup(ResolveInfo ri, String label) {
         if (ri == null || ri.serviceInfo == null || ri.serviceInfo.applicationInfo == null) {
             return false;
         }
+
         ApplicationInfo ai = ri.serviceInfo.applicationInfo;
-        boolean isSystem = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-        boolean isUpdatedSystem = (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0;
-        return !isSystem && !isUpdatedSystem;
+        boolean isSystem = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
+                || (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0;
+
+        if (!isSystem) return true;
+
+        String n = normalizeLabel(label);
+        return n.equals("chup anh man hinh")
+                || n.contains("xiaomi hyperai")
+                || n.equals("lien ket voi windows")
+                || n.equals("lien thong")
+                || n.contains("link to windows");
+    }
+
+    private void addResolveInfo(Map<String, Candidate> out, ResolveInfo ri, PackageManager pm) {
+        if (ri == null || ri.serviceInfo == null) return;
+
+        String pkg = ri.serviceInfo.packageName;
+        String cls = ri.serviceInfo.name;
+        String flat = canonicalComponent(new ComponentName(pkg, cls).flattenToString());
+        if (flat == null) return;
+
+        CharSequence labelCs = ri.loadLabel(pm);
+        String label = labelCs != null ? labelCs.toString().trim() : pkg;
+        if (label.isEmpty()) label = pkg;
+
+        if (!shouldAppearInDownloadedGroup(ri, label)) return;
+
+        ApplicationInfo ai = ri.serviceInfo.applicationInfo;
+        boolean system = ai != null && (((ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0)
+                || ((ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0));
+
+        out.put(flat, new Candidate(flat, label, system));
     }
 
     private void loadDownloadedServices() {
@@ -177,33 +225,39 @@ public class MainActivity extends Activity {
         SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
         Set<String> selected = sp.getStringSet(KEY_SELECTED, new LinkedHashSet<>());
 
+        PackageManager pm = getPackageManager();
+        Map<String, Candidate> unique = new LinkedHashMap<>();
+
+        // Source 1: AccessibilityManager. This is the most accurate source when
+        // the OS returns the complete list.
         AccessibilityManager am = (AccessibilityManager) getSystemService(Context.ACCESSIBILITY_SERVICE);
         List<AccessibilityServiceInfo> installed = am.getInstalledAccessibilityServiceList();
-        PackageManager pm = getPackageManager();
-        List<Candidate> candidates = new ArrayList<>();
-
         if (installed != null) {
             for (AccessibilityServiceInfo info : installed) {
-                ResolveInfo ri = info.getResolveInfo();
-                if (!isDownloadedAccessibilityService(ri)) continue;
-
-                String pkg = ri.serviceInfo.packageName;
-                String cls = ri.serviceInfo.name;
-                String flat = canonicalComponent(new ComponentName(pkg, cls).flattenToString());
-                if (flat == null) continue;
-
-                CharSequence labelCs = ri.loadLabel(pm);
-                String label = labelCs != null ? labelCs.toString().trim() : pkg;
-                if (label.isEmpty()) label = pkg;
-                candidates.add(new Candidate(flat, label));
+                addResolveInfo(unique, info.getResolveInfo(), pm);
             }
         }
 
+        // Source 2: explicit package query. Android 11+ package visibility can
+        // otherwise hide third-party services such as Alarmy/Key Mapper.
+        try {
+            Intent intent = new Intent(AccessibilityService.SERVICE_INTERFACE);
+            int flags = PackageManager.MATCH_DISABLED_COMPONENTS
+                    | PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            List<ResolveInfo> resolved = pm.queryIntentServices(intent, flags);
+            if (resolved != null) {
+                for (ResolveInfo ri : resolved) addResolveInfo(unique, ri, pm);
+            }
+        } catch (Throwable ignored) {
+        }
+
+        List<Candidate> candidates = new ArrayList<>(unique.values());
         final Collator collator = Collator.getInstance(new Locale("vi", "VN"));
         Collections.sort(candidates, Comparator.comparing(c -> c.label, collator));
 
         if (candidates.isEmpty()) {
-            TextView empty = text("Không tìm thấy ứng dụng Trợ năng đã tải xuống.", 16);
+            TextView empty = text("Không tìm thấy ứng dụng trong mục “Ứng dụng đã tải xuống”.", 16);
             empty.setPadding(0, dp(8), 0, dp(8));
             serviceList.addView(empty);
             return;
@@ -275,21 +329,19 @@ public class MainActivity extends Activity {
                 services.isEmpty() ? 0 : 1);
     }
 
-    /** Tắt chỉ nhóm "Ứng dụng đã tải xuống", giữ nguyên các dịch vụ hệ thống khác. */
     private void disableAllDownloaded() {
         if (!ensurePermission()) return;
         try {
             Set<String> enabled = currentlyEnabled();
             enabled.removeAll(downloadedComponents());
             writeEnabledServices(enabled);
-            Toast.makeText(this, "Đã tắt tất cả ứng dụng Trợ năng đã tải xuống", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Đã tắt tất cả", Toast.LENGTH_SHORT).show();
             refreshEnabledStateHints();
         } catch (Throwable t) {
             showError(t);
         }
     }
 
-    /** Bật thêm những app được tích chọn; không tắt các dịch vụ khác đang bật. */
     private void enableSelectedDownloaded() {
         if (!ensurePermission()) return;
         try {

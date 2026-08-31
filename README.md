@@ -1,4 +1,4 @@
-# Quản lý Trợ năng v1.2
+# Quản lý Trợ năng v1.3
 
 Ứng dụng Android dành cho việc quản lý các Accessibility Service trong nhóm **Ứng dụng đã tải xuống**.
 
@@ -21,4 +21,10 @@ Sau khi cấp quyền có thể rút USB; app không cần Shizuku, Wi‑Fi hay 
 
 ## Build bằng GitHub Actions
 
-Vào **Actions → Build APK → Run workflow**. APK nằm trong Artifacts với tên `QuanLyTroNang-v1.2`.
+Vào **Actions → Build APK → Run workflow**. APK nằm trong Artifacts với tên `QuanLyTroNang-v1.3`.
+
+
+## v1.3
+- Sửa lỗi Android/HyperOS không thấy app bên thứ ba do package visibility.
+- Dò Accessibility Service từ cả AccessibilityManager và PackageManager.
+- Lọc gần với nhóm “Ứng dụng đã tải xuống” trên HyperOS.
