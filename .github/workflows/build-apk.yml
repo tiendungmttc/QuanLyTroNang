@@ -27,10 +27,10 @@ jobs:
         run: gradle :app:assembleRelease --stacktrace
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk QuanLyTroNang-v1.3.apk
+        run: cp app/build/outputs/apk/release/app-release.apk QuanLyTroNang-v1.4.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: QuanLyTroNang-v1.3
-          path: QuanLyTroNang-v1.3.apk
+          name: QuanLyTroNang-v1.4
+          path: QuanLyTroNang-v1.4.apk

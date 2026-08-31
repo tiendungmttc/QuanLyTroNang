@@ -9,7 +9,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.content.pm.ResolveInfo;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -238,8 +240,7 @@ public class MainActivity extends Activity {
             }
         }
 
-        // Source 2: explicit package query. Android 11+ package visibility can
-        // otherwise hide third-party services such as Alarmy/Key Mapper.
+        // Source 2: explicit intent query.
         try {
             Intent intent = new Intent(AccessibilityService.SERVICE_INTERFACE);
             int flags = PackageManager.MATCH_DISABLED_COMPONENTS
@@ -248,6 +249,37 @@ public class MainActivity extends Activity {
             List<ResolveInfo> resolved = pm.queryIntentServices(intent, flags);
             if (resolved != null) {
                 for (ResolveInfo ri : resolved) addResolveInfo(unique, ri, pm);
+            }
+        } catch (Throwable ignored) {
+        }
+
+        // Source 3: scan every installed package and inspect its declared services.
+        // Some HyperOS builds do not return certain user-installed accessibility
+        // services through either AccessibilityManager or queryIntentServices().
+        // QUERY_ALL_PACKAGES + GET_SERVICES catches those cases (for example the
+        // locally built “Lọc cước Xanh SM” app).
+        try {
+            int pkgFlags = PackageManager.GET_SERVICES
+                    | PackageManager.GET_META_DATA
+                    | PackageManager.MATCH_DISABLED_COMPONENTS
+                    | PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            List<PackageInfo> packages = pm.getInstalledPackages(pkgFlags);
+            if (packages != null) {
+                for (PackageInfo pi : packages) {
+                    if (pi == null || pi.services == null) continue;
+                    for (ServiceInfo si : pi.services) {
+                        if (si == null) continue;
+                        boolean isAccessibility =
+                                Manifest.permission.BIND_ACCESSIBILITY_SERVICE.equals(si.permission)
+                                || (si.metaData != null && si.metaData.containsKey("android.accessibilityservice"));
+                        if (!isAccessibility) continue;
+
+                        ResolveInfo ri = new ResolveInfo();
+                        ri.serviceInfo = si;
+                        addResolveInfo(unique, ri, pm);
+                    }
+                }
             }
         } catch (Throwable ignored) {
         }
